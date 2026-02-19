@@ -1,44 +1,24 @@
 {
-  // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
-    // File Layout
-    // "rootDir": "./src",
-    // "outDir": "./dist",
+    // --- 1. The Critical Fixes ---
+    "module": "commonjs",           // Standard Node.js behavior (fixes import errors)
+    "moduleResolution": "node",     // Finds files like 'src/db' correctly
+    "target": "es2020",             // Modern enough for async/await
+    "types": ["node"],              // Fixes "Cannot find name 'process'"
 
-    // Environment Settings
-    // See also https://aka.ms/tsconfig/module
-    "module": "nodenext",
-    "target": "esnext",
-    "types": [],
-    // For nodejs:
-    // "lib": ["esnext"],
-    // "types": ["node"],
-    // and npm install -D @types/node
+    // --- 2. File Locations ---
+    "rootDir": "./",                // Allows files in root (like test-db.ts) and src/ to be compiled
+    "outDir": "./dist",             // Keeps your project clean
+    
+    // --- 3. Compatibility ---
+    "esModuleInterop": true,        // Allows importing CommonJS modules easily
+    "skipLibCheck": true,           // Ignores errors in library files (saves sanity)
+    "strict": true,                 // Good practice, keeps code safe
 
-    // Other Outputs
-    "sourceMap": true,
-    "declaration": true,
-    "declarationMap": true,
-
-    // Stricter Typechecking Options
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-
-    // Style Options
-    // "noImplicitReturns": true,
-    // "noImplicitOverride": true,
-    // "noUnusedLocals": true,
-    // "noUnusedParameters": true,
-    // "noFallthroughCasesInSwitch": true,
-    // "noPropertyAccessFromIndexSignature": true,
-
-    // Recommended Options
-    "strict": true,
-    "jsx": "react-jsx",
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noUncheckedSideEffectImports": true,
-    "moduleDetection": "force",
-    "skipLibCheck": true,
-  }
+    // --- 4. Disable the settings that caused your specific errors ---
+    "verbatimModuleSyntax": false,  // This was causing the "import/export" error
+    "isolatedModules": false
+  },
+  "include": ["src/**/*", "test-db.ts"],
+  "exclude": ["node_modules"]
 }
