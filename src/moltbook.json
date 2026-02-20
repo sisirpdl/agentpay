@@ -1,0 +1,22 @@
+[
+  { "name": "Downtown Coffee Shop",    "username": "downtown_coffee",   "wallet_address": "0x1111111111111111111111111111111111111111" },
+  { "name": "City Gym",                "username": "city_gym",           "wallet_address": "0x2222222222222222222222222222222222222222" },
+  { "name": "Green Grocer Market",     "username": "green_grocer",       "wallet_address": "0x3333333333333333333333333333333333333333" },
+  { "name": "Metro Pizza",             "username": "metro_pizza",        "wallet_address": "0x4444444444444444444444444444444444444444" },
+  { "name": "Sunrise Bakery",          "username": "sunrise_bakery",     "wallet_address": "0x5555555555555555555555555555555555555555" },
+  { "name": "Bookworm Library Cafe",   "username": "bookworm_cafe",      "wallet_address": "0x6666666666666666666666666666666666666666" },
+  { "name": "Tech Repair Hub",         "username": "tech_repair",        "wallet_address": "0x7777777777777777777777777777777777777777" },
+  { "name": "Night Owl Pharmacy",      "username": "night_owl_rx",       "wallet_address": "0x8888888888888888888888888888888888888888" },
+  { "name": "Harbor Fish & Chips",     "username": "harbor_fish",        "wallet_address": "0x9999999999999999999999999999999999999999" },
+  { "name": "Bloom Flower Studio",     "username": "bloom_flowers",      "wallet_address": "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+  { "name": "Iron Barbell Gym",        "username": "iron_barbell",       "wallet_address": "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" },
+  { "name": "Cloud Nine Laundry",      "username": "cloud_nine",         "wallet_address": "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC" },
+  { "name": "Pixel Print Shop",        "username": "pixel_print",        "wallet_address": "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD" },
+  { "name": "Maple Street Diner",      "username": "maple_diner",        "wallet_address": "0xEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE" },
+  { "name": "Ocean Breeze Spa",        "username": "ocean_spa",          "wallet_address": "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" },
+  { "name": "Golden Wok Restaurant",   "username": "golden_wok",         "wallet_address": "0x1234123412341234123412341234123412341234" },
+  { "name": "Velocity Bike Shop",      "username": "velocity_bikes",     "wallet_address": "0x2345234523452345234523452345234523452345" },
+  { "name": "Cornerstone Hardware",    "username": "cornerstone_hw",     "wallet_address": "0x3456345634563456345634563456345634563456" },
+  { "name": "Neon Nails Studio",       "username": "neon_nails",         "wallet_address": "0x4567456745674567456745674567456745674567" },
+  { "name": "Summit Outdoor Gear",     "username": "summit_outdoor",     "wallet_address": "0x5678567856785678567856785678567856785678" }
+]

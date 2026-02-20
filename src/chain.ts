@@ -110,6 +110,21 @@ export async function getBalance(address: string) {
   return formatUnits(balance, USDC_DECIMALS); // returns e.g. "1.0"
 }
 
+// Get ETH balance of an address (needed for gas — USDC transfers require ETH)
+export async function getEthBalance(address: string) {
+  const balance = await publicClient.getBalance({
+    address: address as `0x${string}`,
+  });
+
+  return formatUnits(balance, 18); // ETH uses 18 decimals, returns e.g. "0.01"
+}
+
+// Check if address has enough ETH to cover gas for a USDC transfer (~0.0005 ETH buffer)
+export async function hasGasFunds(address: string): Promise<boolean> {
+  const ethBalance = await getEthBalance(address);
+  return parseFloat(ethBalance) >= 0.0005;
+}
+
 // Create wallet and store in Supabase — called during onboarding
 // delegation is the MetaMask gator-cli delegation string for this user
 export async function createAndStoreWallet(telegramId: string) {
