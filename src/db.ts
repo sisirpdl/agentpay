@@ -1,5 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 
+
+export async function getUserByTelegramId(telegramId: string) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('telegram_id', telegramId)
+    .single();
+  if (error) return null;
+  return data;
+}
+
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!
