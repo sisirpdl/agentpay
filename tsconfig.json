@@ -3,7 +3,8 @@
     // --- 1. The Critical Fixes ---
     "module": "commonjs",           // Standard Node.js behavior (fixes import errors)
     "moduleResolution": "node",     // Finds files like 'src/db' correctly
-    "target": "es2020",             // Modern enough for async/await
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
     "types": ["node"],              // Fixes "Cannot find name 'process'"
 
     // --- 2. File Locations ---
