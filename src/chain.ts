@@ -102,14 +102,15 @@ export async function getBalance(address: string) {
   return formatUnits(balance, USDC_DECIMALS); // returns e.g. "1.0"
 }
 
-// Create wallet and store in Supabase — called when new user messages bot
-export async function createAndStoreWallet(telegramId: string) {
+// Create wallet and store in Supabase — called during onboarding
+// delegation is the MetaMask gator-cli delegation string for this user
+export async function createAndStoreWallet(telegramId: string, delegation: string) {
   const wallet = generateWallet();
 
   const user = await insertUser(
     telegramId,
     wallet.address,
-    wallet.encryptedPrivateKey
+    delegation
   );
 
   return user;

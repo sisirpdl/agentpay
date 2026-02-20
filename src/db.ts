@@ -1,5 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+);
 
 export async function getUserByTelegramId(telegramId: string) {
   const { data, error } = await supabase
@@ -11,18 +15,13 @@ export async function getUserByTelegramId(telegramId: string) {
   return data;
 }
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_KEY!
-);
-
-export async function insertUser(telegramId: string, walletAddress: string, encryptedPrivateKey: string) {
+export async function insertUser(telegramId: string, walletAddress: string, delegation: string) {
   const { data, error } = await supabase
     .from('users')
     .insert({
       telegram_id: telegramId,
       wallet_address: walletAddress,
-      encrypted_private_key: encryptedPrivateKey,
+      delegation,
     })
     .select()
     .single();
