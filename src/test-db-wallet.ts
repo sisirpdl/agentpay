@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { createAndStoreWallet } from './chain';
 
 async function test() {
-  const user = await createAndStoreWallet('987654321', 'pending_delegation');
+  const user = await createAndStoreWallet('987654321');
   console.log('✅ Wallet stored:', user);
 }
 

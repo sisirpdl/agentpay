@@ -19,13 +19,13 @@ export async function getUserByTelegramId(telegramId: string) {
 
 // delegation field stores encrypted private key for demo;
 // will store real ERC-7710 delegation JSON once smart-accounts-kit is wired up.
-export async function insertUser(telegramId: string, walletAddress: string, delegation: string) {
+export async function insertUser(telegramId: string, walletAddress: string, encryptedPrivateKey: string) {
   const { data, error } = await supabase
     .from('users')
     .insert({
       telegram_id: telegramId,
       wallet_address: walletAddress,
-      delegation,
+      delegation: encryptedPrivateKey,
     })
     .select()
     .single();

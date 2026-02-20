@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "metamask-agent-wallet-skill": {
+      "version": "0.1.0",
+      "installedAt": 1771608568119
+    },
+    "metamask-smart-accounts-kit": {
+      "version": "1.0.0",
+      "installedAt": 1771608612301
+    },
+    "gator-cli": {
+      "version": "1.0.1",
+      "installedAt": 1771608661590
+    }
+  }
+}

@@ -20,7 +20,6 @@ export default function (api: any) {
     let user = await getUserByTelegramId(telegramId);
     if (!user) {
       const wallet = generateWallet();
-      // Store encryptedPrivateKey in delegation column as demo placeholder
       user = await insertUser(telegramId, wallet.address, wallet.encryptedPrivateKey);
     }
     return user;

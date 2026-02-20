@@ -104,14 +104,8 @@ export async function getBalance(address: string) {
 
 // Create wallet and store in Supabase — called during onboarding
 // delegation is the MetaMask gator-cli delegation string for this user
-export async function createAndStoreWallet(telegramId: string, delegation: string) {
+export async function createAndStoreWallet(telegramId: string) {
   const wallet = generateWallet();
-
-  const user = await insertUser(
-    telegramId,
-    wallet.address,
-    delegation
-  );
-
+  const user = await insertUser(telegramId, wallet.address, wallet.encryptedPrivateKey);
   return user;
 }
