@@ -1,16 +1,27 @@
 import 'dotenv/config';
-import { getUserByTelegramId, insertUser, searchRecipients, insertTx } from '../db';
+import {
+  getUserByTelegramId,
+  insertUser,
+  searchRecipients,
+  insertTx,
+  storePendingPayment,
+  getPendingPayment,
+  clearPendingPayment,
+} from '../db';
 import { getBalance, transfer, generateWallet } from '../chain';
 
 export default function (api: any) {
+
   // ── Onboarding helper ─────────────────────────────────────────────────────
-  // Called whenever a tool needs a user that doesn't exist yet.
-  // delegation is left as a placeholder until gator-cli is wired up.
+  // Creates a server-side EOA wallet for new users.
+  // delegation column stores the encrypted private key for the demo.
+  // TODO: replace with real ERC-7710 delegation once smart-accounts-kit is wired.
   async function ensureUser(telegramId: string) {
     let user = await getUserByTelegramId(telegramId);
     if (!user) {
       const wallet = generateWallet();
-      user = await insertUser(telegramId, wallet.address, 'pending_delegation');
+      // Store encryptedPrivateKey in delegation column as demo placeholder
+      user = await insertUser(telegramId, wallet.address, wallet.encryptedPrivateKey);
     }
     return user;
   }
@@ -18,7 +29,7 @@ export default function (api: any) {
   // ── check_balance ─────────────────────────────────────────────────────────
   api.registerTool({
     name: 'check_balance',
-    description: 'Returns the USDC balance of the calling user\'s AgentPay wallet.',
+    description: "Returns the USDC balance of the calling user's AgentPay wallet.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -37,11 +48,16 @@ export default function (api: any) {
   });
 
   // ── send_payment ──────────────────────────────────────────────────────────
+  // Two-phase flow:
+  //   Phase 1 (confirmed omitted): fuzzy search + balance check → store pending → return for confirmation
+  //   Phase 2 (confirmed: true):   retrieve pending → execute transfer → record tx
+  //   Cancel  (confirmed: false):  clear pending → return cancelled
   api.registerTool({
     name: 'send_payment',
     description:
-      'Sends USDC to a merchant or recipient by name. Fuzzy-searches the recipient ' +
-      'directory, then executes the transfer. Returns the transaction hash on success.',
+      'Sends USDC to a merchant or recipient by name. ' +
+      'First call returns a confirmation request. ' +
+      'Call again with confirmed=true to execute, or confirmed=false to cancel.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -57,60 +73,130 @@ export default function (api: any) {
           type: 'string',
           description: 'Telegram user ID of the sender, injected from session.',
         },
+        confirmed: {
+          type: 'boolean',
+          description: 'Omit on first call. Pass true to confirm, false to cancel.',
+        },
       },
-      required: ['recipient_name', 'amount', 'senderTelegramId'],
+      required: ['senderTelegramId'],
     },
     handler: async (input: {
-      recipient_name: string;
-      amount: number;
+      recipient_name?: string;
+      amount?: number;
       senderTelegramId: string;
+      confirmed?: boolean;
     }) => {
-      const { recipient_name, amount, senderTelegramId } = input;
+      const { senderTelegramId, confirmed } = input;
 
-      // 1. Fuzzy search for recipient
+      // ── Cancel ────────────────────────────────────────────────────────────
+      if (confirmed === false) {
+        await clearPendingPayment(senderTelegramId);
+        return { status: 'cancelled', message: 'Payment cancelled.' };
+      }
+
+      // ── Phase 2: Execute ──────────────────────────────────────────────────
+      if (confirmed === true) {
+        const pending = await getPendingPayment(senderTelegramId);
+        if (!pending) {
+          return { success: false, error: 'No pending payment found. Please start a new payment.' };
+        }
+
+        const sender = await ensureUser(senderTelegramId);
+
+        // delegation column holds encrypted private key for demo
+        const txHash = await transfer(
+          sender.delegation,
+          pending.recipient_address,
+          Number(pending.amount)
+        );
+
+        const balanceAfter = await getBalance(sender.wallet_address);
+
+        await insertTx({
+          senderId: senderTelegramId,
+          recipientAddress: pending.recipient_address,
+          recipientName: pending.recipient_name,
+          amount: Number(pending.amount),
+          txHash,
+          status: 'success',
+        });
+
+        await clearPendingPayment(senderTelegramId);
+
+        return {
+          success: true,
+          recipient: pending.recipient_name,
+          amount: pending.amount,
+          currency: 'USDC',
+          txHash,
+          balance_after: balanceAfter,
+        };
+      }
+
+      // ── Phase 1: Intent ───────────────────────────────────────────────────
+      const { recipient_name, amount } = input;
+      if (!recipient_name || amount == null) {
+        return { success: false, error: 'recipient_name and amount are required.' };
+      }
+
+      // 1. Fuzzy search
       const results = await searchRecipients(recipient_name);
       if (!results || results.length === 0) {
         return { success: false, error: `No recipient found matching "${recipient_name}".` };
       }
-      const recipient = results[0]; // top fuzzy match
+      const recipient = results[0];
 
-      // 2. Ensure sender exists (onboard if new)
+      // 2. Ensure sender exists
       const sender = await ensureUser(senderTelegramId);
 
-      // 3. Transfer
-      // TODO: replace with gator-cli delegation flow once integrated.
-      // For now, transfer() uses the sender's stored encrypted key (legacy path).
-      // This will be swapped when delegation is wired up.
-      if (!sender.encrypted_private_key) {
+      // 3. Balance check
+      const balanceBefore = await getBalance(sender.wallet_address);
+      if (parseFloat(balanceBefore) < amount) {
         return {
           success: false,
-          error: 'Delegation not yet configured for this account. Onboarding incomplete.',
+          error: `Insufficient balance. You have ${balanceBefore} USDC but tried to send ${amount} USDC.`,
+          balance: balanceBefore,
+          currency: 'USDC',
         };
       }
 
-      const txHash = await transfer(
-        sender.encrypted_private_key,
+      // 4. Store pending intent
+      await storePendingPayment(
+        senderTelegramId,
+        recipient.name,
         recipient.wallet_address,
         amount
       );
 
-      // 4. Record in tx_history
-      await insertTx({
-        senderId: senderTelegramId,
-        recipientAddress: recipient.wallet_address,
-        recipientName: recipient.name,
-        amount,
-        txHash,
-        status: 'success',
-      });
-
+      // 5. Return pending state — OpenClaw shows confirm/cancel buttons
       return {
-        success: true,
+        status: 'pending_confirmation',
+        message: `Send ${amount} USDC to ${recipient.name}?`,
         recipient: recipient.name,
         amount,
         currency: 'USDC',
-        txHash,
+        balance_before: balanceBefore,
       };
+    },
+  });
+
+  // ── cancel_payment ────────────────────────────────────────────────────────
+  api.registerTool({
+    name: 'cancel_payment',
+    description: 'Cancels any pending payment for the user.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        senderTelegramId: {
+          type: 'string',
+          description: 'Telegram user ID of the sender, injected from session.',
+        },
+      },
+      required: ['senderTelegramId'],
+    },
+    handler: async (input: { senderTelegramId: string }) => {
+      await clearPendingPayment(input.senderTelegramId);
+      return { status: 'cancelled', message: 'Payment cancelled.' };
     },
   });
 }
