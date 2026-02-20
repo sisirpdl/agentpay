@@ -87,7 +87,7 @@ export async function insertTx(tx: {
   recipientName: string;
   amount: number;
   txHash: string;
-  status: 'success' | 'failed';
+  status: 'success' | 'reverted';
 }) {
   const { data, error } = await supabase
     .from('tx_history')

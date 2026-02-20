@@ -103,7 +103,7 @@ export default function (api: any) {
         const sender = await ensureUser(senderTelegramId);
 
         // delegation column holds encrypted private key for demo
-        const txHash = await transfer(
+        const { txHash, status } = await transfer(
           sender.delegation,
           pending.recipient_address,
           Number(pending.amount)
@@ -117,10 +117,19 @@ export default function (api: any) {
           recipientName: pending.recipient_name,
           amount: Number(pending.amount),
           txHash,
-          status: 'success',
+          status,
         });
 
         await clearPendingPayment(senderTelegramId);
+
+        if (status === 'reverted') {
+          return {
+            success: false,
+            error: 'Transaction was reverted on-chain. No funds were transferred.',
+            txHash,
+            balance_after: balanceAfter,
+          };
+        }
 
         return {
           success: true,

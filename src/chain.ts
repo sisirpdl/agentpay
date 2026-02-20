@@ -87,7 +87,15 @@ export async function transfer(
     ],
   });
 
-  return txHash;
+  const receipt = await publicClient.waitForTransactionReceipt({
+    hash: txHash,
+    timeout: 60_000,
+  });
+
+  return {
+    txHash,
+    status: receipt.status, // 'success' or 'reverted'
+  };
 }
 
 // Get USDC balance of an address
