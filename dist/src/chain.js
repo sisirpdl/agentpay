@@ -6,6 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateWallet = generateWallet;
 exports.transfer = transfer;
 exports.getBalance = getBalance;
+exports.getEthBalance = getEthBalance;
+exports.hasGasFunds = hasGasFunds;
 exports.createAndStoreWallet = createAndStoreWallet;
 require("dotenv/config");
 const viem_1 = require("viem");
@@ -74,7 +76,14 @@ async function transfer(encryptedPrivateKey, toAddress, amount // human readable
             (0, viem_1.parseUnits)(amount.toString(), USDC_DECIMALS),
         ],
     });
-    return txHash;
+    const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: 60_000,
+    });
+    return {
+        txHash,
+        status: receipt.status, // 'success' or 'reverted'
+    };
 }
 // Get USDC balance of an address
 async function getBalance(address) {
@@ -85,6 +94,18 @@ async function getBalance(address) {
         args: [address],
     });
     return (0, viem_1.formatUnits)(balance, USDC_DECIMALS); // returns e.g. "1.0"
+}
+// Get ETH balance of an address (needed for gas — USDC transfers require ETH)
+async function getEthBalance(address) {
+    const balance = await publicClient.getBalance({
+        address: address,
+    });
+    return (0, viem_1.formatUnits)(balance, 18); // ETH uses 18 decimals, returns e.g. "0.01"
+}
+// Check if address has enough ETH to cover gas for a USDC transfer (~0.0005 ETH buffer)
+async function hasGasFunds(address) {
+    const ethBalance = await getEthBalance(address);
+    return parseFloat(ethBalance) >= 0.0005;
 }
 // Create wallet and store in Supabase — called during onboarding
 // delegation is the MetaMask gator-cli delegation string for this user

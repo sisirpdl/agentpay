@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/moltbook.json dist/src/moltbook.json",
     "plugin": "ts-node src/plugin/index.ts",
     "bank:test": "ts-node src/bank.ts",
     "db:test": "ts-node src/test-db.ts"
