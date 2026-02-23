@@ -6,11 +6,13 @@ import {
   insertUser,
   searchRecipients,
   searchLocalContacts,
+  isAddressInContacts,
   saveContact,
   insertTx,
   storePendingPayment,
   getPendingPayment,
   clearPendingPayment,
+  checkLimits,
   type Contact,
 } from '../db';
 import { getBalance, transfer, generateWallet } from '../chain';
@@ -33,8 +35,6 @@ function searchMoltbook(query: string): Contact[] {
 type ResolvedResult = { contact: Contact; tier: 1 | 2 | 3; tierLabel: string; score: number };
 
 // ── Match scoring ─────────────────────────────────────────────────────────
-// 100 = exact name | 90 = exact username | 80 = name starts with query
-// 50  = substring  | 0  = no match
 function matchScore(contact: Contact, query: string): number {
   const name = contact.name.toLowerCase();
   const q = query.toLowerCase();
@@ -45,21 +45,26 @@ function matchScore(contact: Contact, query: string): number {
   return 0;
 }
 
-// ── 3-Tier search with score-based fallthrough ────────────────────────────
-// STRONG local match (score ≥ 70) → stop at local, no global lookup needed
-// WEAK  local match (score < 70)  → also search global + Moltbook and merge all
-// No local match                  → global → Moltbook
-// @username query                 → always exact match, first tier that hits wins
+// ── Risk scoring ──────────────────────────────────────────────────────────
+// Factors: new recipient (+30), large amount (+20), unverified (+15)
+// < 30 → proceed normally
+// 30–60 → add warning to confirm message
+// > 60 → require address challenge before confirming
+function calcRiskScore(isNewRecipient: boolean, amount: number, isVerified: boolean): number {
+  let score = 0;
+  if (isNewRecipient) score += 30;
+  if (amount > 100) score += 20;
+  if (!isVerified) score += 15;
+  return score;
+}
+
+// ── 3-Tier search ─────────────────────────────────────────────────────────
 const STRONG_MATCH_THRESHOLD = 70;
 
-async function searchAllTiers(
-  telegramId: string,
-  query: string
-): Promise<ResolvedResult[]> {
+async function searchAllTiers(telegramId: string, query: string): Promise<ResolvedResult[]> {
   const isUsername = query.startsWith('@');
 
   if (isUsername) {
-    // Exact username lookup — first tier that hits wins
     const local = await searchLocalContacts(telegramId, query);
     if (local.length > 0) return [{ contact: local[0], tier: 1, tierLabel: 'your contacts', score: 90 }];
 
@@ -74,7 +79,6 @@ async function searchAllTiers(
     return [];
   }
 
-  // Score local contacts
   const localRaw = await searchLocalContacts(telegramId, query);
   const localScored: ResolvedResult[] = localRaw
     .map((c) => ({ contact: c, tier: 1 as const, tierLabel: 'your contacts', score: matchScore(c, query) }))
@@ -84,11 +88,9 @@ async function searchAllTiers(
   const bestLocalScore = localScored[0]?.score ?? 0;
 
   if (bestLocalScore >= STRONG_MATCH_THRESHOLD) {
-    // Strong local match — return top 3 locals, no need to check further
     return localScored.slice(0, 3);
   }
 
-  // Weak or no local match — search global and Moltbook too, then merge
   const globalRaw = (await searchRecipients(query)) ?? [];
   const globalScored: ResolvedResult[] = (globalRaw as Contact[])
     .map((c) => ({ contact: c, tier: 2 as const, tierLabel: 'global directory', score: matchScore(c, query) }))
@@ -101,30 +103,19 @@ async function searchAllTiers(
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  // Merge all results, sort by score desc, dedupe by wallet_address, return top 3
-  const merged = [...localScored, ...globalScored, ...mbScored]
-    .sort((a, b) => b.score - a.score);
-
+  const merged = [...localScored, ...globalScored, ...mbScored].sort((a, b) => b.score - a.score);
   const seen = new Set<string>();
   const deduped: ResolvedResult[] = [];
   for (const r of merged) {
     const key = r.contact.wallet_address.toLowerCase();
-    if (!seen.has(key)) {
-      seen.add(key);
-      deduped.push(r);
-    }
+    if (!seen.has(key)) { seen.add(key); deduped.push(r); }
     if (deduped.length === 3) break;
   }
-
   return deduped;
 }
 
 export default function (api: any) {
 
-  // ── Onboarding helper ─────────────────────────────────────────────────────
-  // Creates a server-side EOA wallet for new users.
-  // delegation column stores the encrypted private key for the demo.
-  // TODO: replace with real ERC-7710 delegation once smart-accounts-kit is wired.
   async function ensureUser(telegramId: string) {
     let user = await getUserByTelegramId(telegramId);
     if (!user) {
@@ -139,20 +130,13 @@ export default function (api: any) {
     name: 'search_contacts',
     description:
       'Searches for a recipient across 3 tiers: local saved contacts → global directory → Moltbook. ' +
-      'Prefix with @ for exact username match (e.g. @downtown_coffee). ' +
-      'Returns 1 result (proceed to payment) or a disambiguation list (ask user to pick). ' +
-      'Use this before send_payment to confirm who the user wants to pay.',
+      'Prefix with @ for exact username match. Returns 1 result (proceed to payment) or disambiguation list. ' +
+      'Always call this before send_payment.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: {
-          type: 'string',
-          description: 'Name, partial name, or @username to search, e.g. "coffee", "downtown", or "@downtown_coffee".',
-        },
-        senderTelegramId: {
-          type: 'string',
-          description: 'Telegram user ID of the sender, injected from session.',
-        },
+        query: { type: 'string', description: 'Name, partial name, or @username to search.' },
+        senderTelegramId: { type: 'string', description: 'Telegram user ID of the sender.' },
       },
       required: ['query', 'senderTelegramId'],
     },
@@ -160,17 +144,13 @@ export default function (api: any) {
       const results = await searchAllTiers(input.senderTelegramId, input.query);
 
       if (results.length === 0) {
-        return {
-          found: false,
-          message: `No recipient found matching "${input.query}". Try a @username for an exact match.`,
-        };
+        return { found: false, message: `No recipient found matching "${input.query}". Try a @username for an exact match.` };
       }
 
       if (results.length === 1) {
         const { contact, tierLabel } = results[0];
         return {
-          found: true,
-          unique: true,
+          found: true, unique: true,
           name: contact.name,
           username: contact.username ? `@${contact.username}` : null,
           wallet_address: contact.wallet_address,
@@ -178,10 +158,8 @@ export default function (api: any) {
         };
       }
 
-      // Multiple matches — return list for disambiguation
       return {
-        found: true,
-        unique: false,
+        found: true, unique: false,
         message: 'Multiple matches found. Ask the user which one they mean, or to provide a @username.',
         matches: results.map((r, i) => ({
           index: i + 1,
@@ -198,57 +176,49 @@ export default function (api: any) {
   // ── check_balance ─────────────────────────────────────────────────────────
   api.registerTool({
     name: 'check_balance',
-    description: "Returns the USDC balance of the calling user's AgentPay wallet.",
+    description: "Returns the user's USDC balance, wallet address, and remaining daily spending limit.",
     inputSchema: {
       type: 'object',
       properties: {
-        senderTelegramId: {
-          type: 'string',
-          description: 'Telegram user ID of the sender, injected from session.',
-        },
+        senderTelegramId: { type: 'string', description: 'Telegram user ID of the sender.' },
       },
       required: ['senderTelegramId'],
     },
     handler: async (input: { senderTelegramId: string }) => {
       const user = await ensureUser(input.senderTelegramId);
       const balance = await getBalance(user.wallet_address);
-      return { balance, currency: 'USDC', address: user.wallet_address };
+      const limits = await checkLimits(input.senderTelegramId, 0);
+      return {
+        balance,
+        currency: 'USDC',
+        address: user.wallet_address,
+        daily_remaining: limits.daily_remaining,
+        per_tx_max: (user.limits as any)?.per_tx_max ?? 500,
+      };
     },
   });
 
   // ── send_payment ──────────────────────────────────────────────────────────
-  // Two-phase flow:
-  //   Phase 1 (confirmed omitted): fuzzy search + balance check → store pending → return for confirmation
-  //   Phase 2 (confirmed: true):   retrieve pending → execute transfer → record tx
-  //   Cancel  (confirmed: false):  clear pending → return cancelled
+  // Phase 1 (no confirmed): search → risk score → store pending → return confirm/challenge
+  // Phase 2 (confirmed: true): check limits → verify challenge if needed → execute transfer
+  // Cancel  (confirmed: false): clear pending
   api.registerTool({
     name: 'send_payment',
     description:
-      'Sends USDC to a merchant or recipient by name. ' +
-      'First call returns a confirmation request. ' +
-      'Call again with confirmed=true to execute, or confirmed=false to cancel.',
+      'Sends USDC to a recipient. Phase 1: omit confirmed to create a payment intent. ' +
+      'Phase 2: pass confirmed=true (+ address_challenge if prompted) to execute. ' +
+      'Pass confirmed=false to cancel.',
     inputSchema: {
       type: 'object',
       properties: {
-        recipient_name: {
+        recipient_name: { type: 'string', description: 'Name or partial name of the recipient.' },
+        recipient_username: { type: 'string', description: 'Exact @username (without @) for disambiguation.' },
+        amount: { type: 'number', description: 'USDC amount to send, e.g. 5 for $5.00.' },
+        senderTelegramId: { type: 'string', description: 'Telegram user ID of the sender.' },
+        confirmed: { type: 'boolean', description: 'Omit on first call. true to execute, false to cancel.' },
+        address_challenge: {
           type: 'string',
-          description: 'Name (or partial name) of the recipient, e.g. "coffee" or "Downtown Coffee".',
-        },
-        recipient_username: {
-          type: 'string',
-          description: 'Exact @username of the recipient (without @), used to disambiguate when multiple matches exist.',
-        },
-        amount: {
-          type: 'number',
-          description: 'Amount of USDC to send, e.g. 5 for $5.00.',
-        },
-        senderTelegramId: {
-          type: 'string',
-          description: 'Telegram user ID of the sender, injected from session.',
-        },
-        confirmed: {
-          type: 'boolean',
-          description: 'Omit on first call. Pass true to confirm, false to cancel.',
+          description: 'First 6 characters of recipient address typed by user — required when risk score > 60.',
         },
       },
       required: ['senderTelegramId'],
@@ -259,6 +229,7 @@ export default function (api: any) {
       amount?: number;
       senderTelegramId: string;
       confirmed?: boolean;
+      address_challenge?: string;
     }) => {
       const { senderTelegramId, confirmed } = input;
 
@@ -275,15 +246,35 @@ export default function (api: any) {
           return { success: false, error: 'No pending payment found. Please start a new payment.' };
         }
 
-        const sender = await ensureUser(senderTelegramId);
+        // ── Spending limits check ─────────────────────────────────────────
+        const limitCheck = await checkLimits(senderTelegramId, Number(pending.amount));
+        if (!limitCheck.allowed) {
+          await clearPendingPayment(senderTelegramId);
+          return { success: false, error: `Payment blocked: ${limitCheck.reason}` };
+        }
 
-        // delegation column holds encrypted private key for demo
+        // ── Address challenge for high-risk payments ──────────────────────
+        const riskScore = Number(pending.risk_score ?? 0);
+        if (riskScore > 60) {
+          const expected = pending.recipient_address.slice(0, 6).toLowerCase();
+          const provided = (input.address_challenge ?? '').toLowerCase();
+          if (provided !== expected) {
+            return {
+              success: false,
+              status: 'address_challenge_required',
+              message: `⚠️ High-risk payment. Type the first 6 characters of the recipient's address to confirm.\nAddress: ${pending.recipient_address.slice(0, 6)}...${pending.recipient_address.slice(-4)}`,
+              hint: 'Provide address_challenge with the first 6 characters of the recipient address.',
+            };
+          }
+        }
+
+        // ── Execute transfer ──────────────────────────────────────────────
+        const sender = await ensureUser(senderTelegramId);
         const { txHash, status } = await transfer(
           sender.delegation,
           pending.recipient_address,
           Number(pending.amount)
         );
-
         const balanceAfter = await getBalance(sender.wallet_address);
 
         await insertTx({
@@ -294,23 +285,16 @@ export default function (api: any) {
           txHash,
           status,
         });
-
         await clearPendingPayment(senderTelegramId);
 
-        // Auto-save contact to local contacts after first successful payment
         if (status !== 'reverted') {
-          await saveContact(
-            senderTelegramId,
-            pending.recipient_name,
-            pending.recipient_address,
-            pending.recipient_username ?? undefined
-          );
+          await saveContact(senderTelegramId, pending.recipient_name, pending.recipient_address, pending.recipient_username ?? undefined);
         }
 
         if (status === 'reverted') {
           return {
             success: false,
-            error: 'Transaction was reverted on-chain. No funds were transferred.',
+            error: 'Transaction reverted on-chain. No funds transferred.',
             txHash,
             balance_after: balanceAfter,
           };
@@ -323,6 +307,7 @@ export default function (api: any) {
           currency: 'USDC',
           txHash,
           balance_after: balanceAfter,
+          daily_remaining: limitCheck.daily_remaining,
         };
       }
 
@@ -332,68 +317,88 @@ export default function (api: any) {
         return { success: false, error: 'recipient_name (or recipient_username) and amount are required.' };
       }
 
-      // 1. 3-tier search — @username for exact pick, name for fuzzy
+      // 1. 3-tier search
       const query = recipient_username ? `@${recipient_username}` : recipient_name!;
       const results = await searchAllTiers(senderTelegramId, query);
 
       if (results.length === 0) {
         return { success: false, error: `No recipient found matching "${query}". Try a @username for exact match.` };
       }
-
       if (results.length > 1) {
         return {
-          success: false,
-          status: 'disambiguation_needed',
+          success: false, status: 'disambiguation_needed',
           message: 'Multiple recipients found. Please specify a @username.',
           matches: results.map((r, i) => ({
-            index: i + 1,
-            name: r.contact.name,
+            index: i + 1, name: r.contact.name,
             username: r.contact.username ? `@${r.contact.username}` : null,
-            wallet_address: r.contact.wallet_address,
-            match_score: r.score,
+            wallet_address: r.contact.wallet_address, match_score: r.score,
           })),
         };
       }
 
-      const recipient = results[0].contact;
-      const tierLabel = results[0].tierLabel;
+      const { contact: recipient, tier } = results[0];
 
-      // 2. Ensure sender exists
+      // 2. Ensure sender exists + balance check
       const sender = await ensureUser(senderTelegramId);
-
-      // 3. Balance check
       const balanceBefore = await getBalance(sender.wallet_address);
       if (parseFloat(balanceBefore) < amount) {
         return {
           success: false,
           error: `Insufficient balance. You have ${balanceBefore} USDC but tried to send ${amount} USDC.`,
-          balance: balanceBefore,
-          currency: 'USDC',
+          balance: balanceBefore, currency: 'USDC',
         };
       }
 
-      // 4. Store pending intent
+      // 3. Risk scoring
+      const isNewRecipient = !(await isAddressInContacts(senderTelegramId, recipient.wallet_address));
+      const isVerified = tier === 2 && (recipient.verified === true);
+      const riskScore = calcRiskScore(isNewRecipient, amount, isVerified);
+
+      // 4. Store pending intent with risk score
       await storePendingPayment(
-        senderTelegramId,
-        recipient.name,
-        recipient.wallet_address,
-        amount,
-        recipient.username
+        senderTelegramId, recipient.name, recipient.wallet_address,
+        amount, recipient.username, riskScore
       );
 
-      // 5. Return pending state — show name, @username, and truncated address for sender to verify
       const addrShort = `${recipient.wallet_address.slice(0, 6)}...${recipient.wallet_address.slice(-4)}`;
+      const baseMessage = `Send ${amount} USDC to ${recipient.name}${recipient.username ? ` (@${recipient.username})` : ''}?`;
+
+      // 5. Return based on risk score
+      if (riskScore > 60) {
+        return {
+          status: 'address_challenge_required',
+          message: `⚠️ High-risk payment detected (score ${riskScore}/65).\n\n${baseMessage}\n\nTo proceed, the user must type the first 6 characters of the recipient's address:\n${addrShort}`,
+          risk_score: riskScore,
+          risk_factors: [
+            isNewRecipient ? '• New recipient (not in your contacts)' : null,
+            amount > 100 ? '• Large amount (> 100 USDC)' : null,
+            !isVerified ? '• Recipient not verified in global directory' : null,
+          ].filter(Boolean),
+          recipient: recipient.name,
+          wallet_address_short: addrShort,
+          amount, currency: 'USDC',
+        };
+      }
+
+      const warningText = riskScore >= 30
+        ? `\n\n⚠️ Heads up: ${[
+            isNewRecipient ? 'new recipient' : null,
+            amount > 100 ? 'large amount' : null,
+            !isVerified ? 'unverified recipient' : null,
+          ].filter(Boolean).join(', ')}.`
+        : '';
+
       return {
         status: 'pending_confirmation',
-        message: `Send ${amount} USDC to ${recipient.name}${recipient.username ? ` (@${recipient.username})` : ''}?`,
+        message: baseMessage + warningText,
         recipient: recipient.name,
         username: recipient.username ? `@${recipient.username}` : null,
         wallet_address: recipient.wallet_address,
         wallet_address_short: addrShort,
-        amount,
-        currency: 'USDC',
+        amount, currency: 'USDC',
         balance_before: balanceBefore,
-        found_via: tierLabel,
+        found_via: results[0].tierLabel,
+        risk_score: riskScore,
       };
     },
   });
@@ -405,10 +410,7 @@ export default function (api: any) {
     inputSchema: {
       type: 'object',
       properties: {
-        senderTelegramId: {
-          type: 'string',
-          description: 'Telegram user ID of the sender, injected from session.',
-        },
+        senderTelegramId: { type: 'string', description: 'Telegram user ID of the sender.' },
       },
       required: ['senderTelegramId'],
     },

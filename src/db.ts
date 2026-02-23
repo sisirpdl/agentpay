@@ -26,6 +26,7 @@ export async function insertUser(telegramId: string, walletAddress: string, encr
       telegram_id: telegramId,
       wallet_address: walletAddress,
       delegation: encryptedPrivateKey,
+      limits: { per_tx_max: 500, daily_max: 2000 },
     })
     .select()
     .single();
@@ -35,7 +36,7 @@ export async function insertUser(telegramId: string, walletAddress: string, encr
 
 // ── Local contacts (per-user JSONB) ──────────────────────────────────────
 
-export type Contact = { name: string; username?: string; wallet_address: string };
+export type Contact = { name: string; username?: string; wallet_address: string; verified?: boolean };
 
 // Search by name substring OR exact @username match
 export async function searchLocalContacts(telegramId: string, query: string): Promise<Contact[]> {
@@ -51,6 +52,14 @@ export async function searchLocalContacts(telegramId: string, query: string): Pr
   return contacts.filter(
     (c) => c.name.toLowerCase().includes(q) || c.username?.toLowerCase().includes(q)
   );
+}
+
+// Check if a specific wallet address is already in the user's local contacts
+export async function isAddressInContacts(telegramId: string, walletAddress: string): Promise<boolean> {
+  const user = await getUserByTelegramId(telegramId);
+  if (!user?.contacts) return false;
+  const contacts = user.contacts as Contact[];
+  return contacts.some((c) => c.wallet_address.toLowerCase() === walletAddress.toLowerCase());
 }
 
 // Append a contact (skip if address already exists)
@@ -84,6 +93,57 @@ export async function searchRecipients(query: string) {
   return data;
 }
 
+// ── Spending limits ───────────────────────────────────────────────────────
+
+export type LimitsResult = {
+  allowed: boolean;
+  reason: string;
+  daily_remaining: number;
+};
+
+export async function checkLimits(chatId: string, amount: number): Promise<LimitsResult> {
+  const user = await getUserByTelegramId(chatId);
+  if (!user) return { allowed: false, reason: 'User not found.', daily_remaining: 0 };
+
+  const limits = (user.limits as { per_tx_max: number; daily_max: number }) ?? {
+    per_tx_max: 500,
+    daily_max: 2000,
+  };
+
+  // Per-transaction limit
+  if (amount > limits.per_tx_max) {
+    return {
+      allowed: false,
+      reason: `Amount ${amount} USDC exceeds your per-transaction limit of ${limits.per_tx_max} USDC.`,
+      daily_remaining: 0,
+    };
+  }
+
+  // Daily limit: sum successful txs in the last 24 hours
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: txs, error } = await supabase
+    .from('tx_history')
+    .select('amount')
+    .eq('sender_id', chatId)
+    .eq('status', 'success')
+    .gte('created_at', since);
+
+  if (error) throw error;
+
+  const dailySpent = (txs ?? []).reduce((sum, t) => sum + Number(t.amount), 0);
+  const daily_remaining = limits.daily_max - dailySpent;
+
+  if (dailySpent + amount > limits.daily_max) {
+    return {
+      allowed: false,
+      reason: `This payment would exceed your daily limit of ${limits.daily_max} USDC. Daily remaining: ${daily_remaining.toFixed(2)} USDC.`,
+      daily_remaining,
+    };
+  }
+
+  return { allowed: true, reason: '', daily_remaining: daily_remaining - amount };
+}
+
 // ── Pending payments ──────────────────────────────────────────────────────
 
 export async function storePendingPayment(
@@ -91,7 +151,8 @@ export async function storePendingPayment(
   recipientName: string,
   recipientAddress: string,
   amount: number,
-  recipientUsername?: string
+  recipientUsername?: string,
+  riskScore?: number
 ) {
   const { error } = await supabase
     .from('pending_payments')
@@ -101,6 +162,7 @@ export async function storePendingPayment(
       recipient_address: recipientAddress,
       amount,
       recipient_username: recipientUsername ?? null,
+      risk_score: riskScore ?? 0,
     }, { onConflict: 'chat_id' });
   if (error) throw error;
 }
